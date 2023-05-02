@@ -38,13 +38,64 @@ const configureAxios = () => {
   return instance;
 }
 
+let existingDomains = [];
+
+const plans = {
+	'default': {
+		'aliases': 400,
+		'mailboxes': 10,
+		'defquota': 3072,
+		'maxquota': 10240,
+		'quota': 10240,
+		'active': true
+	},
+	'basic': {
+		'aliases': 400,
+		'mailboxes': 10,
+		'defquota': 1024,
+		'maxquota': 10240,
+		'quota': 10240,
+		'active': true,
+		'rl_frame': "h",
+		'rl_value': 500
+	},
+	'business': {
+		'aliases': 400,
+		'mailboxes': 25,
+		'defquota': 1024,
+		'maxquota': 10240,
+		'quota': 25600,
+		'active': true,
+		'rl_frame': "h",
+		'rl_value': 1500
+	},
+	'professional': {
+		'aliases': 400,
+		'mailboxes': 50,
+		'defquota': 3072,
+		'maxquota': 10240,
+		'quota': 51200,
+		'active': true,
+		'rl_frame': "h",
+		'rl_value': 5000
+	},
+	'enterprise': {
+		'aliases': 4000,
+		'mailboxes': 1000,
+		'defquota': 3072,
+		'maxquota': 10240,
+		'quota': 256000,
+		'active': true
+	}
+};
+
 const importFile = async (filename) => {
   let importJSON = null;
 
   try {
     importJSON = await csvtojsonV2({
       noheader: true,
-      headers: ['email', 'name', 'password', 'quota']
+      headers: ['email', 'name', 'password', 'quota', 'plan']
     }).fromFile(filename);
   } catch (error) {
     console.error(`Error while import:\n${error}`);
@@ -53,7 +104,7 @@ const importFile = async (filename) => {
   return importJSON.map(element => {
     const emailParts = element.email.split('@');
     delete element.email;
-    return { ...element, local_part: emailParts[0], domain: emailParts[1], active: "1", password2: element.password }
+    return { ...element, local_part: emailParts[0], domain: emailParts[1], active: "1", password: element.password , password2: element.password , tls_enforce_in: "1" , tls_enforce_out: "1" }
   });
 }
 
@@ -73,9 +124,52 @@ const addMailbox = async (mailboxInfo) => {
   }
 }
 
+const checkDomain = async (mailboxInfo) => {
+  if(existingDomains.includes(mailboxInfo.domain)) return true;
+  try {
+    const result = await axiosInstance.get(`/api/v1/get/domain/${mailboxInfo.domain}`);
+    if (result.status !== 200) {
+      console.error(`Error while checking domain ${mailboxInfo.domain}.`);
+      if (program.exitonerror) {
+        process.exit(3);
+      }
+    }
+    if(result.data.hasOwnProperty('gal')) {
+		existingDomains.push(mailboxInfo.domain);
+		return true;
+	}
+	return false;
+  } catch (error) {
+    console.error(`Error while checking domain ${mailboxInfo.domain}:\n${error}`);
+    process.exit(2);
+  }
+}
+
+const addDomain = async (mailboxInfo) => {
+  try {
+    const result = await axiosInstance.post('/api/v1/add/domain', {
+		domain: mailboxInfo.domain,
+		gal: "1",
+		...plans[mailboxInfo.plan]
+	});
+    if (result.status !== 200) {
+      console.error(`Error while creating domain ${mailboxInfo.domain}.`);
+      if (program.exitonerror) {
+        process.exit(3);
+      }
+    }
+    console.log(`Created domain ${mailboxInfo.domain} with plan ${mailboxInfo.plan}`);
+  } catch (error) {
+    console.error(`Error while adding domain ${mailboxInfo.domain}:\n${error}`);
+    process.exit(2);
+  }
+}
+
 const addMailboxes = async (mailboxInfos) => {
   console.log(`Beginning import of ${mailboxInfos.length} mailboxes`);
   mailboxInfos.map(async (mailboxInfo) => {
+	let domainExists = await checkDomain(mailboxInfo);
+	if(!domainExists) await addDomain(mailboxInfo);
     await addMailbox(mailboxInfo);
   })
 }
